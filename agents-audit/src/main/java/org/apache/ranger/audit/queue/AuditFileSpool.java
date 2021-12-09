@@ -19,14 +19,17 @@
 
 package org.apache.ranger.audit.queue;
 
+import java.io.BufferedOutputStream;
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
 import java.io.File;
 import java.io.FileFilter;
 import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
 import java.io.FileReader;
 import java.io.FileWriter;
 import java.io.IOException;
+import java.io.OutputStream;
 import java.io.PrintWriter;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -37,6 +40,7 @@ import java.util.Properties;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.zip.GZIPOutputStream;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -91,7 +95,7 @@ public class AuditFileSpool implements Runnable {
 	int errorLogIntervalMS = 30 * 1000; // Every 30 seconds
 	long lastErrorLogMS = 0;
 
-	List<AuditIndexRecord> indexRecords = new ArrayList<AuditIndexRecord>();
+	List<AuditIndexRecord> indexRecords = new ArrayList<>();
 
 	boolean isPending = false;
 	long lastAttemptTime = 0;
@@ -186,7 +190,7 @@ public class AuditFileSpool implements Runnable {
 
 			if (logFileNameFormat == null || logFileNameFormat.isEmpty()) {
 				logFileNameFormat = "spool_" + "%app-type%" + "_"
-						+ "%time:yyyyMMdd-HHmm.ss%.log";
+						+ "%time:yyyyMMdd-HHmm.ss%.log.gz";
 			}
 			logger.info("logFileNameFormat=" + logFileNameFormat
 					+ ", queueName=" + queueProvider.getName());
@@ -251,7 +255,7 @@ public class AuditFileSpool implements Runnable {
 					+ queueProvider.getName());
 
 			// Load index file
-			loadIndexFile();
+			indexRecords = loadIndexFile();
 			for (AuditIndexRecord auditIndexRecord : indexRecords) {
 				if (!auditIndexRecord.status.equals(SPOOL_FILE_STATUS.done)) {
 					isPending = true;
@@ -497,9 +501,14 @@ public class AuditFileSpool implements Runnable {
 			fileName = newFileName;
 			logger.info("Creating new file. queueName="
 					+ queueProvider.getName() + ", fileName=" + fileName);
+
+			OutputStream os = new BufferedOutputStream(new FileOutputStream(outLogFile)); 
+			if (fileName.endsWith(".gz")) {
+				os = new GZIPOutputStream(os);
+			}
+
 			// Open the file
-			logWriter = new PrintWriter(new BufferedWriter(new FileWriter(
-					outLogFile)));
+			logWriter = new PrintWriter(os);
 
 			AuditIndexRecord tmpIndexRecord = new AuditIndexRecord();
 
@@ -514,13 +523,17 @@ public class AuditFileSpool implements Runnable {
 
 		} else {
 			if (logWriter == null) {
+				final String outFile = currentWriterIndexRecord.filePath;
 				// This means the process just started. We need to open the file
 				// in append mode.
 				logger.info("Opening existing file for append. queueName="
 						+ queueProvider.getName() + ", fileName="
-						+ currentWriterIndexRecord.filePath);
-				logWriter = new PrintWriter(new BufferedWriter(new FileWriter(
-						currentWriterIndexRecord.filePath, true)));
+						+ outFile);
+				OutputStream os = new BufferedOutputStream(new FileOutputStream(outFile, true)); 
+				if (outFile.endsWith(".gz")) {
+					os = new GZIPOutputStream(os);
+				}
+				logWriter = new PrintWriter(os);
 			}
 		}
 		return logWriter;
@@ -548,7 +561,6 @@ public class AuditFileSpool implements Runnable {
 			if (closeFile) {
 				// Roll the file
 				if (logWriter != null) {
-					logWriter.flush();
 					logWriter.close();
 					logWriter = null;
 				}
@@ -565,30 +577,29 @@ public class AuditFileSpool implements Runnable {
 	}
 
 	/**
-	 * Load the index file
+	 * Load the index file.
 	 *
-	 * @throws IOException
+	 * @throws IOException If an I/O error occurs
 	 */
-	void loadIndexFile() throws IOException {
-		logger.info("Loading index file. fileName=" + indexFile.getPath());
-		BufferedReader br = new BufferedReader(new FileReader(indexFile));
-		indexRecords.clear();
-		String line;
-		while ((line = br.readLine()) != null) {
-			if (!line.isEmpty() && !line.startsWith("#")) {
-				AuditIndexRecord record = gson.fromJson(line,
-						AuditIndexRecord.class);
-				indexRecords.add(record);
+	private List<AuditIndexRecord> loadIndexFile() throws IOException {
+		logger.info("Loading index file [" + indexFile + "]");
+		final List<AuditIndexRecord> records = new ArrayList<>();
+		try (BufferedReader br = new BufferedReader(new FileReader(indexFile))) {
+			String line;
+			while ((line = br.readLine()) != null) {
+				if (!line.isEmpty() && !line.startsWith("#")) {
+					AuditIndexRecord record = gson.fromJson(line,
+							AuditIndexRecord.class);
+					records.add(record);
+				}
 			}
 		}
-		br.close();
+		return records;
 	}
 
 	synchronized void printIndex() {
 		logger.info("INDEX printIndex() ==== START");
-		Iterator<AuditIndexRecord> iter = indexRecords.iterator();
-		while (iter.hasNext()) {
-			AuditIndexRecord record = iter.next();
+		for (final AuditIndexRecord record : indexRecords) {
 			logger.info("INDEX=" + record + ", isFileExist="
 					+ (new File(record.filePath).exists()));
 		}
@@ -618,13 +629,11 @@ public class AuditFileSpool implements Runnable {
 	}
 
 	synchronized void saveIndexFile() throws FileNotFoundException, IOException {
-		PrintWriter out = new PrintWriter(indexFile);
-		for (AuditIndexRecord auditIndexRecord : indexRecords) {
-			out.println(gson.toJson(auditIndexRecord));
+		try (PrintWriter out = new PrintWriter(indexFile)) {
+			for (AuditIndexRecord auditIndexRecord : indexRecords) {
+				out.println(gson.toJson(auditIndexRecord));
+			}
 		}
-		out.close();
-		// printIndex();
-
 	}
 
 	void appendToDoneFile(AuditIndexRecord indexRecord)
@@ -633,11 +642,10 @@ public class AuditFileSpool implements Runnable {
 				+ ", queueName=" + queueProvider.getName() + ", consumer="
 				+ consumerProvider.getName());
 		String line = gson.toJson(indexRecord);
-		PrintWriter out = new PrintWriter(new BufferedWriter(new FileWriter(
-				indexDoneFile, true)));
-		out.println(line);
-		out.flush();
-		out.close();
+		try (PrintWriter out = new PrintWriter(new BufferedWriter(new FileWriter(
+				indexDoneFile, true)))) {
+			out.println(line);	
+		}
 
 		// Move to archive folder
 		File logFile = null;
