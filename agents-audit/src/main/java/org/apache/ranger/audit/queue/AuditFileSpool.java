@@ -33,6 +33,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
+import java.io.OutputStreamWriter;
 import java.io.PrintWriter;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -511,7 +512,7 @@ public class AuditFileSpool implements Runnable {
 			}
 
 			// Open the file
-			logWriter = new PrintWriter(os);
+			logWriter = new PrintWriter(new OutputStreamWriter(os, StandardCharsets.UTF_8));
 
 			AuditIndexRecord tmpIndexRecord = new AuditIndexRecord();
 
@@ -536,7 +537,7 @@ public class AuditFileSpool implements Runnable {
 				if (outFile.endsWith(".gz")) {
 					os = new GZIPOutputStream(os);
 				}
-				logWriter = new PrintWriter(os);
+				logWriter = new PrintWriter(new OutputStreamWriter(os, StandardCharsets.UTF_8));
 			}
 		}
 		return logWriter;
