@@ -24,13 +24,17 @@ import java.io.BufferedReader;
 import java.io.BufferedWriter;
 import java.io.File;
 import java.io.FileFilter;
+import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.FileReader;
 import java.io.FileWriter;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.io.PrintWriter;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Date;
@@ -40,6 +44,7 @@ import java.util.Properties;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.zip.GZIPInputStream;
 import java.util.zip.GZIPOutputStream;
 
 import org.apache.commons.logging.Log;
@@ -104,8 +109,6 @@ public class AuditFileSpool implements Runnable {
 	PrintWriter logWriter = null;
 	AuditIndexRecord currentWriterIndexRecord = null;
 	AuditIndexRecord currentConsumerIndexRecord = null;
-
-	BufferedReader logReader = null;
 
 	Thread destinationThread = null;
 
@@ -502,7 +505,7 @@ public class AuditFileSpool implements Runnable {
 			logger.info("Creating new file. queueName="
 					+ queueProvider.getName() + ", fileName=" + fileName);
 
-			OutputStream os = new BufferedOutputStream(new FileOutputStream(outLogFile)); 
+			OutputStream os = new BufferedOutputStream(new FileOutputStream(outLogFile));
 			if (fileName.endsWith(".gz")) {
 				os = new GZIPOutputStream(os);
 			}
@@ -529,7 +532,7 @@ public class AuditFileSpool implements Runnable {
 				logger.info("Opening existing file for append. queueName="
 						+ queueProvider.getName() + ", fileName="
 						+ outFile);
-				OutputStream os = new BufferedOutputStream(new FileOutputStream(outFile, true)); 
+				OutputStream os = new BufferedOutputStream(new FileOutputStream(outFile, true));
 				if (outFile.endsWith(".gz")) {
 					os = new GZIPOutputStream(os);
 				}
@@ -644,7 +647,7 @@ public class AuditFileSpool implements Runnable {
 		String line = gson.toJson(indexRecord);
 		try (PrintWriter out = new PrintWriter(new BufferedWriter(new FileWriter(
 				indexDoneFile, true)))) {
-			out.println(line);	
+			out.println(line);
 		}
 
 		// Move to archive folder
@@ -808,9 +811,13 @@ public class AuditFileSpool implements Runnable {
 					printIndex();
 					isRemoveIndex = true;
 				} else {
-					// Let's open the file to write
-					BufferedReader br = new BufferedReader(new FileReader(
-							currentConsumerIndexRecord.filePath));
+					final String srcFile = currentConsumerIndexRecord.filePath;
+					InputStream fileStream = new FileInputStream(srcFile);
+					if (srcFile.endsWith(".gz")) {
+						fileStream = new GZIPInputStream(fileStream);
+					}
+					final BufferedReader br = new BufferedReader(
+							new InputStreamReader(fileStream, StandardCharsets.UTF_8));
 					try {
 						int startLine = currentConsumerIndexRecord.linePosition;
 						String line;
